@@ -1,0 +1,167 @@
+# Relatório de análise — fine-tuning completo (EdgeNeXt-XS, MobileViT-S, MobileNetV4) na graduação histopatológica ordinal
+
+Oct 11, 2026 · @André
+
+## Resumo executivo
+
+O MobileViT-S é o melhor dos três backbones (QWK 0,796 \[IC95% 0,726–0,849\]), mas a vantagem de \~0,07 sobre EdgeNeXt-XS e MobileNetV4 não é estatisticamente conclusiva com 5 sementes. O gargalo não é a escolha do backbone: é a separação entre **mild, moderate e severe**, que fica em 42–63% de recall por classe, enquanto healthy passa de 95%.
+
+- **Healthy é resolvido.** Recall de 95–100% e especificidade de 95–100% para "doente vs. saudável" (sensibilidade 98–99%).
+- **Os erros são quase todos adjacentes.** 64–67% dos ROIs saem corretos, 25–27% erram por um grau e só 6–10% por dois ou mais. Isso é o comportamento esperado de um problema ordinal ruidoso, e explica por que QWK (0,73–0,80) é muito mais alto que a acurácia (0,64–0,67).
+- **Agregar por imagem melhora.** Média das probabilidades dos ROIs de cada imagem eleva o QWK médio para 0,77–0,84 (MobileViT-S: 0,844).
+- **A variância vem do split, não do modelo.** O desvio-padrão do QWK entre sementes é 0,07–0,11 e o mesmo split difícil (sementes 2 e 4) derruba os três modelos. Cada teste tem só 22 imagens.
+- **A seleção de época pela validação não é confiável.** A validação (11 imagens) superestima o teste em 0,10–0,19 de QWK e não se correlaciona com ele entre as 15 execuções (ρ de Spearman = −0,26).
+- **O treino sobreajusta rápido e fica superconfiante.** A loss de validação é mínima nas épocas 5–18 e depois sobe de 0,74–0,92 para 1,6–2,1, com ECE de 0,22–0,28 (o modelo tem >0,9 de confiança em 52–70% dos ROIs, mas acerta só 72–78% deles).
+- **Risco não verificável com o material enviado:** o `dias_coleta.csv` não veio no zip, então não foi possível testar confundimento por dia de coleta (seção 9).
+
+## Dados e protocolo experimental
+
+O protocolo é um holdout 70/10/20 repetido em 5 sementes, dividido por imagem de origem (sem vazamento de ROIs entre treino e teste) e estratificado por classe. Três pontos do desenho limitam o que os números permitem concluir.
+
+| Item | Valor |
+| --- | --- |
+| ROIs / imagens de origem | 456 ROIs (114 por classe) / 108 imagens (32 healthy, 21 mild, 27 moderate, 28 severe) |
+| Treino / validação / teste por semente | \~319 / \~44 / \~93 ROIs; 75 / 11 / 22 imagens |
+| Imagens distintas que chegaram ao teste em alguma semente | 74 de 108 (healthy 24, mild 13, moderate 18, severe 19) |
+| Imagens por classe em cada teste | \~4–7 (a classe mild tem só 21 imagens no total) |
+| Treino | Fine-tuning completo, AdamW, LR 1e-4 constante, weight decay 0,01, cross-entropy, lote 32, 100 épocas, AMP fp16, sem scheduler e sem early stopping |
+| Entrada | Multi-crop no tamanho nativo do backbone cobrindo o ROI, mean pooling das features; RCAug só no treino |
+| Seleção de época | Maior QWK de validação |
+| Hardware | Tesla T4 (14,6 GB), PyTorch 2.11, timm 1.0.30 |
+
+**Ressalvas que valem para todo o relatório**
+
+1. **Teste minúsculo em imagens.** Os ROIs de uma mesma imagem são fortemente correlacionados, então o tamanho amostral efetivo de cada teste é \~22, não \~93. Uma única imagem com 10–15 ROIs errados move a métrica de uma semente.
+2. **As sementes não são independentes.** Os cinco testes se sobrepõem (cada imagem tem 1–4 aparições em teste entre as sementes) e todos os modelos veem exatamente os mesmos splits. Médias e DPs entre sementes são úteis, mas p-valores pareados com n=5 subestimam a incerteza.
+3. **O IC bootstrap cobre só a amostragem do teste.** Ele reamostra imagens dentro do teste de cada semente; não captura a variância de treino/split, que aqui é maior. Os ICs são, portanto, otimistas para a pergunta "qual modelo vai melhor em dados novos".
+
+## Desempenho global
+
+O MobileViT-S lidera em QWK, F1 macro, acurácia balanceada, acurácia e distância ordinal média (MOD), mas os intervalos de confiança dos três modelos se sobrepõem em todas as métricas. Em AUROC, EdgeNeXt-XS (0,856) e MobileViT-S (0,854) empatam; o MobileNetV4 fica atrás (0,828).
+
+| Modelo | QWK \[IC95%\] | DP entre sementes (QWK) | F1 macro | Acurácia balanceada | Acurácia | AUROC | MOD (↓) |
+| --- | --- | --- | --- | --- | --- | --- | --- |
+| MobileViT-S | **0,796** \[0,726–0,849\] | 0,080 | **0,666** \[0,601–0,719\] | **0,673** \[0,618–0,727\] | **0,673** \[0,614–0,732\] | 0,854 \[0,816–0,890\] | **0,384** \[0,309–0,467\] |
+| EdgeNeXt-XS | 0,731 \[0,646–0,797\] | 0,111 | 0,633 \[0,572–0,682\] | 0,641 \[0,585–0,695\] | 0,644 \[0,583–0,699\] | **0,856** \[0,812–0,894\] | 0,467 \[0,378–0,569\] |
+| MobileNetV4 | 0,730 \[0,653–0,789\] | 0,070 | 0,622 \[0,560–0,670\] | 0,634 \[0,581–0,683\] | 0,637 \[0,582–0,691\] | 0,828 \[0,788–0,866\] | 0,469 \[0,393–0,557\] |
+
+MOD é a distância ordinal média |real − previsto| em graus (menor é melhor); IC95% por bootstrap sobre imagens de origem, 1000 réplicas, média entre as 5 sementes.
+
+O teste de Friedman entre as 5 sementes dá p=0,074 para QWK e p=0,041 para F1 macro (p>0,16 para acurácia, AUROC e MOD). Com só 5 blocos (que não são independentes), isso é no máximo um indício a favor do MobileViT-S, não uma diferença estabelecida.
+
+&#91;embedded content: execucoes\_por\_semente.csv e resumo\_ic\_numerico.csv · 3 modelos × 5 sementes\]
+
+## Variabilidade entre sementes e comparação pareada
+
+A escolha do split move o QWK mais do que a escolha do modelo: a média dos três modelos varia de 0,654 (semente 4) a 0,827 (semente 3), uma amplitude de 0,17, contra 0,07 entre o melhor e o pior backbone. As sementes 2 e 4 são difíceis para todos; MobileViT-S e MobileNetV4 sobem e descem juntos (r = 0,80 entre sementes), enquanto o EdgeNeXt-XS é mais errático (DP 0,111; QWK de 0,638 na semente 0, em que os outros dois passam de 0,83).
+
+| Comparação (QWK por semente) | Δ médio | Sementes em que o primeiro vence | p t pareado | p Wilcoxon |
+| --- | --- | --- | --- | --- |
+| MobileViT-S − EdgeNeXt-XS | +0,066 | 4 de 5 | 0,20 | 0,19 |
+| MobileViT-S − MobileNetV4 | +0,067 | 5 de 5 | 0,037 | 0,0625 |
+| EdgeNeXt-XS − MobileNetV4 | +0,001 | 3 de 5 | 0,99 | 1,00 |
+
+O único sinal é MobileViT-S > MobileNetV4: vence em todas as sementes, mas o p do t pareado (0,037) não resiste a correção para 3 comparações (\~0,11) e o Wilcoxon com n=5 não consegue passar de 0,0625. Entre EdgeNeXt-XS e MobileNetV4 não há diferença.
+
+&#91;embedded content: execucoes\_por\_semente.csv · QWK de teste, 3 modelos × 5 sementes\]
+
+## Onde os modelos erram
+
+Os três modelos têm o mesmo padrão: healthy é quase perfeito e o erro se concentra em moderate, que funciona como "zona cinzenta" entre mild e severe. Os números abaixo agregam os ROIs de teste das 5 sementes (≈465 ROIs por modelo; 114–120 por classe).
+
+| Recall por classe (agregado) | Healthy | Mild | Moderate | Severe |
+| --- | --- | --- | --- | --- |
+| MobileViT-S | **1,00** | 0,52 | **0,57** | 0,59 |
+| EdgeNeXt-XS | 0,95 | **0,55** | 0,42 | **0,63** |
+| MobileNetV4 | **1,00** | 0,46 | 0,47 | 0,59 |
+
+| Precisão por classe (agregado) | Healthy | Mild | Moderate | Severe |
+| --- | --- | --- | --- | --- |
+| MobileViT-S | 0,96 | 0,51 | 0,44 | **0,84** |
+| EdgeNeXt-XS | **0,97** | 0,48 | **0,46** | 0,65 |
+| MobileNetV4 | 0,95 | 0,47 | 0,42 | 0,67 |
+
+- **Mild ↔ moderate é a maior confusão.** Dos ROIs mild, 33–46 de \~110 viram moderate; dos moderate, 34–36 viram mild. É aqui que a classificação decide se a lesão é de baixo ou alto grau.
+- **Severe é subestimado.** 21–28 ROIs severe viram mild e 19–32 viram moderate, por modelo. No agregado, os modelos subgraduam em 19,8% (EdgeNeXt-XS: 18,5%) dos ROIs e supergraduam em 12,9–17,2%; subgraduar é o erro de maior consequência em um contexto diagnóstico.
+- **O MobileViT-S raramente exagera.** Ele prevê severe só 89 vezes (precisão 0,84) contra 113–124 dos demais, e é o único sem nenhum erro de 3 graus. O EdgeNeXt-XS comete 4 (3 healthy previstos como severe, 1 severe como healthy) e o MobileNetV4 comete 3 (severe previstos como healthy).
+
+&#91;embedded content: predictions/\*.csv do MobileViT-S · 5 sementes agregadas\]
+
+&#91;embedded content: predictions/\*.csv · 3 modelos × 5 sementes agregadas (n = 465 por modelo)\]
+
+**Imagens difíceis são difíceis para todos os modelos.** Das 74 imagens que apareceram em teste, 3 nunca foram acertadas por nenhum modelo em nenhuma semente, e todas são severe. Os erros são sistemáticos (o mesmo grau errado repetido), não ruído:
+
+| Imagem | Classe real | ROIs previstos (soma dos modelos e sementes) | Classe prevista dominante |
+| --- | --- | --- | --- |
+| severe/image024 | severe | 36 (2 sementes) | mild em 27, moderate em 9 |
+| severe/image050 | severe | 15 (1 semente) | moderate em 13 |
+| severe/image086 | severe | 6 (1 semente) | moderate em 5 |
+| severe/image043 | severe | 24 (2 sementes) | mild em 13, moderate em 10 |
+| mild/image018 | mild | 21 (1 semente) | moderate em 20 |
+| mild/image008 | mild | 24 (2 sementes) | moderate em 19 |
+
+Quando três arquiteturas diferentes erram a mesma imagem da mesma forma, a hipótese mais provável não é falta de capacidade do modelo, e sim rótulo de imagem herdado por todos os ROIs (um ROI pouco representativo da lesão recebe o grau da imagem) ou morfologia realmente limítrofe. Vale uma segunda leitura patológica dessas imagens antes de gastar mais tempo de modelagem.
+
+## Nível de imagem e tarefas binárias
+
+Agregar os ROIs de cada imagem (média das probabilidades) e colapsar a escala em decisões binárias mostram o que o sistema já entrega hoje: detecção de doença é praticamente resolvida, e a separação entre baixo e alto grau acerta cerca de 3 em 4 ROIs.
+
+| Modelo | QWK por ROI | QWK por imagem (22 imagens por semente) | Healthy vs. doente: sensibilidade / especificidade | Baixo (healthy+mild) vs. alto grau (moderate+severe): acurácia | AUROC alto vs. baixo |
+| --- | --- | --- | --- | --- | --- |
+| MobileViT-S | 0,796 | **0,844** | 0,986 / 1,000 | **0,770** | **0,850** |
+| EdgeNeXt-XS | 0,731 | 0,805 | **0,988** / 0,950 | 0,751 | 0,825 |
+| MobileNetV4 | 0,730 | 0,766 | 0,980 / 1,000 | 0,738 | 0,811 |
+
+As acurácias baixo/alto grau por semente vão de 0,63 a 0,85, o mesmo padrão de sementes difíceis visto antes. O QWK por imagem do EdgeNeXt-XS cai a 0,570 na semente 4 (as outras ficam em 0,80–0,89), outra evidência de que poucos casos limítrofes dominam o resultado.
+
+**Um ensemble dos três modelos não ajuda.** A média das probabilidades dos três backbones dá QWK 0,795 ± 0,092, acurácia 0,668 e F1 macro 0,658, praticamente idênticos aos do MobileViT-S sozinho (0,796 / 0,673 / 0,666). Se os modelos errassem de formas independentes, o ensemble deveria subir; como não sobe, os erros são compartilhados e vêm dos dados (rótulos e ROIs ambíguos), não da variância de cada arquitetura.
+
+## Dinâmica de treino e calibração
+
+Com LR constante de 1e-4 e 100 épocas sem early stopping, os três modelos memorizam o treino (loss de treino \~0,03–0,05 no fim) e as probabilidades pioram muito depois das primeiras épocas, mesmo quando o QWK de validação continua estável ou sobe um pouco. O ranking das classes (que o QWK mede) sobrevive ao sobreajuste; a confiança, não.
+
+| Modelo | Época escolhida pelo QWK de validação (média, mín.–máx.) | Loss de validação média: mínima → época 100 | ECE | NLL no teste | ROIs com confiança >0,9 (acurácia neles) |
+| --- | --- | --- | --- | --- | --- |
+| EdgeNeXt-XS | 29,4 (8–60) | 0,74 (época 18) → 2,12 | **0,215** | **1,19** | 52% (78%) |
+| MobileViT-S | 67,0 (11–100) | 0,74 (época 12) → 1,61 | 0,237 | 1,33 | 68% (75%) |
+| MobileNetV4 | 58,6 (8–83) | 0,92 (época 5) → 2,11 | 0,276 | 2,11 | 70% (72%) |
+
+- **A seleção de época é ruidosa.** A época escolhida varia de 8 a 100 entre sementes do mesmo modelo. O QWK de validação oscila 0,02–0,07 (DP nas épocas 50–100) em só 41–49 ROIs de 11 imagens; escolher o máximo entre 100 épocas nesse sinal infla a validação. Ela chega a 0,84–0,96 no ponto escolhido, contra 0,61–0,88 no teste (diferença média de 0,10 a 0,19), e entre as 15 execuções a correlação entre QWK de validação e de teste é negativa (ρ = −0,26, p = 0,35).
+- **Calibração ruim em todos.** O ECE de 0,22–0,28 significa que a confiança declarada excede a acurácia em \~22–28 pontos percentuais. A acurácia dos ROIs com confiança >0,9 é de só 72–78%, então a probabilidade não pode ser usada hoje como critério de "caso seguro" ou de encaminhamento para revisão.
+- **O MobileViT-S é o mais estável na validação** (DP do QWK nas épocas 50–100 de 0,024–0,036, contra 0,031–0,066 dos outros), o que é coerente com ele ter o maior QWK de teste.
+
+&#91;embedded content: logs/\*\_history.csv · média das 5 sementes por modelo (a partir da época 30, cada 2ª época)\]
+
+## Custo computacional
+
+O custo não é o fator que decide: uma execução de 100 épocas leva 7,7 a 10,5 minutos em uma T4, então o orçamento permite validação muito mais pesada que o holdout atual. O MobileViT-S é o único que cobra caro, com 6,4 GB de VRAM de pico (8,5× o MobileNetV4) e 2× os parâmetros.
+
+| Modelo | Parâmetros (M) | VRAM de pico (GB) | Tempo por época (s) | Tempo até a época escolhida (s, média) | Tempo total de 100 épocas (s) |
+| --- | --- | --- | --- | --- | --- |
+| MobileNetV4 (conv small) | 2,50 | **0,75** | **4,58** | 271 | **462** |
+| EdgeNeXt-XS | **2,14** | 1,91 | 5,14 | **155** | 518 |
+| MobileViT-S | 4,94 | 6,42 | 6,21 | 421 | 628 |
+
+Se o alvo for implantação leve, o EdgeNeXt-XS entrega o melhor AUROC (0,856) com o menor número de parâmetros, empatando com o MobileNetV4 em QWK; o MobileNetV4 só se justifica se a memória de treino for a restrição. Se o alvo for a melhor graduação, o MobileViT-S é a escolha provisória, condicionada ao que as validações mais robustas (seção 10) mostrarem.
+
+## Limitações e riscos
+
+O risco mais importante é o que não pôde ser testado: o efeito do dia de coleta. Nenhum dos números acima prova que o modelo aprendeu histologia e não uma assinatura do dia.
+
+1. **Dia de coleta (não verificado).** O `dias_coleta.csv` não estava no zip. Sem ele não dá para saber se as classes estão distribuídas de forma desigual entre os dois dias (27 números de imagem se repetem entre classes, o que mostra que há mais de um lote). Coloração, iluminação e câmera variam entre sessões, e a rede pode usar isso como atalho. O recall de 95–100% em healthy é compatível tanto com uma classe realmente fácil quanto com um sinal de lote; só a análise por dia distingue as duas hipóteses.
+2. **Dependência entre imagens que o split não vê.** A divisão é por imagem de origem, mas se imagens diferentes vêm da mesma lâmina ou do mesmo paciente (por exemplo, os 13 grupos com sufixo "-2"), elas podem cair em partições diferentes e vazar informação. A checagem de duplicatas que você fez cobre cópias e sobreposição de campo, não essa dependência.
+3. **Rótulo no nível da imagem.** Todos os ROIs herdam o grau da imagem, e as imagens consistentemente erradas pelos três modelos (seção 5) apontam para ruído de rótulo ou ROIs não representativos.
+4. **Sem teste externo.** Todos os resultados vêm de 108 imagens de uma mesma coleta, com testes sobrepostos entre sementes e IC que cobre só a amostragem do teste (seção 2).
+5. **Magnificação não documentada.** Os TIFFs não trazem objetiva nos metadados (72 dpi). Se os dois dias usaram ampliações ou escalas diferentes, isso é mais um fator confundido com o dia.
+
+## Recomendações priorizadas
+
+A ordem segue o que mais muda a confiança nas conclusões, não o que mais sobe a métrica.
+
+1. **Fechar a questão do dia de coleta primeiro.** Envie o `dias_coleta.csv` e tabule classe × dia, o desempenho por dia e uma validação leave-one-day-out. Um teste complementar é treinar um classificador simples para prever o dia a partir do ROI: se acertar muito, há um atalho de lote disponível para a rede.
+2. **Trocar o holdout repetido por validação cruzada agrupada.** Use k-fold estratificado por imagem (por exemplo 5 folds × 3–5 repetições), de modo que toda imagem seja testada o mesmo número de vezes (hoje 34 das 108 nunca foram testadas), e reporte IC por bootstrap de imagens sobre todas as previsões fora da amostra. Pelo custo da seção 8, são \~3–4,5 horas por modelo para 25 execuções em uma T4. Se houver ID de paciente ou lâmina, agrupe por ele.
+3. **Parar de escolher a época pelo máximo do QWK de validação.** Alternativas: número fixo de épocas definido na validação cruzada (os mínimos de loss de validação ficam em 5–25 épocas na maioria dos casos), scheduler com decaimento (cosine) e média de pesos (EMA/SWA), ou escolha por loss/QWK suavizado em janela. Isso tende a reduzir a diferença validação–teste de 0,10–0,19 e a melhorar a calibração.
+4. **Atacar mild ↔ moderate com uma formulação ordinal.** Loss ordinal (CORN/CORAL, EMD ou rótulos suaves entre graus vizinhos) pode ajudar, já que 25–27% dos erros são adjacentes. Atenção à expectativa: decodificar as probabilidades atuais pelo valor esperado arredondado rende só +0,008 a +0,019 de QWK e cai 2–3 pontos de acurácia, então o ganho de mudar a loss pode ser modesto se o limite for o rótulo.
+5. **Auditar as imagens sistematicamente erradas** (as 3 severe nunca acertadas e mild/image018, mild/image008) com uma segunda leitura patológica, e avaliar se o rótulo no nível da imagem é adequado para todos os ROIs. Em paralelo, considere reportar métricas por imagem (agregadas) como resultado principal, pois são o que o diagnóstico usa.
+6. **Calibrar antes de usar a confiança.** Aplique temperature scaling com validação cruzada e meça ECE de novo; só então use um limiar de confiança para triagem ou para pedir revisão humana.
+7. **Escolha de backbone: adie a decisão final.** O MobileViT-S é o candidato provisório (melhor QWK, F1, MOD e menor erro grave), mas a diferença só deve ser tratada como real depois da validação cruzada. O ensemble dos três não compensa (seção 6).
